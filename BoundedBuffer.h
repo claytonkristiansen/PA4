@@ -24,7 +24,7 @@ private:
 
 public:
 	BoundedBuffer(int _cap)
-	:fullSlots(0), emptySlots(cap), mutex(1)
+	:fullSlots(0), emptySlots(cap), mutex(1), cap(_cap)
 	{
 	}
 	~BoundedBuffer()
@@ -33,12 +33,6 @@ public:
 
 	void push(vector<char> data)
 	{
-		// follow the class lecture pseudocode
-
-		//1. Perform necessary waiting (by calling wait on the right semaphores and mutexes),
-		//2. Push the data onto the queue
-		//3. Do necessary unlocking and notification
-
 		emptySlots.P();
 		mutex.P();
 		q.push(data);

@@ -8,6 +8,11 @@ using namespace std;
 
 enum REQUEST_TYPE {FILE_REQUEST_TYPE, DATA_REQUEST_TYPE};
 
+void testingFunc(bool yeehaw)
+{
+	std::cout << "BITCH\n";
+}
+
 struct Response
 {
 	int m_patient;
@@ -41,14 +46,6 @@ vector<char> ResponseToVecOfChar(Response res)
 	return CharArrToVecOfChar(buf, sizeof(Response));
 }
 
-Response VecOfCharToResponse(vector<char> vec)
-{
-	char* buf = VecOfCharToCharArr(vec);
-	Response r;
-	std::memcpy(&r, buf, vec.size());
-	return r;
-}
-
 char* VecOfCharToCharArr(vector<char> vec)
 {
 	char arr[vec.size() + 1];
@@ -59,7 +56,17 @@ char* VecOfCharToCharArr(vector<char> vec)
 	return arr;
 }
 
-void patient_thread_function(REQUEST_TYPE rqType, BoundedBuffer &requestBuffer, int patient, int numItems, string fileName)
+Response VecOfCharToResponse(vector<char> vec)
+{
+	char* buf = VecOfCharToCharArr(vec);
+	Response r;
+	std::memcpy(&r, buf, vec.size());
+	return r;
+}
+
+
+
+void patient_thread_function(REQUEST_TYPE rqType, BoundedBuffer *requestBuffer, int patient, int numItems, string fileName)
 {
 	switch(rqType)
 	{
@@ -67,10 +74,12 @@ void patient_thread_function(REQUEST_TYPE rqType, BoundedBuffer &requestBuffer, 
 			for(int i = 0; i < numItems; ++i)
 			{
 				char buf[sizeof(DataRequest) + 1];
-				std::memcpy(buf, &DataRequest(patient, 0.004 * i, 1), sizeof(DataRequest) + 1);
-				requestBuffer.push(CharArrToVecOfChar(buf, sizeof(DataRequest)));
-				std::memcpy(buf, &DataRequest(patient, 0.004 * i, 2), sizeof(DataRequest) + 1);
-				requestBuffer.push(CharArrToVecOfChar(buf, sizeof(DataRequest)));
+				DataRequest dataRequest(patient, 0.004 * i, 1);
+				std::memcpy(buf, &dataRequest, sizeof(DataRequest) + 1);
+				requestBuffer->push(CharArrToVecOfChar(buf, sizeof(DataRequest)));
+				dataRequest = DataRequest(patient, 0.004 * i, 2);
+				std::memcpy(buf, &dataRequest, sizeof(DataRequest) + 1);
+				requestBuffer->push(CharArrToVecOfChar(buf, sizeof(DataRequest)));
 			}
 			break;
 		case FILE_REQUEST_TYPE:
@@ -94,16 +103,19 @@ void worker_thread_function(REQUEST_TYPE rqType, FIFORequestChannel &mainChan, B
 			vector<char> req = requestBuffer.pop();
 			int reqBufSize = req.size();
 			char* reqBuf = VecOfCharToCharArr(req);
+			DataRequest dataReq(0, 0, 0);
+			std::memcpy(&dataReq, reqBuf, sizeof(DataRequest));
+			int patient = dataReq.person;
 
 			chan.cwrite (&reqBuf, reqBufSize); //question
-			if(std::memcmp(reqBuf, &Request(QUIT_REQ_TYPE), sizeof(Request)) == 0)	//break
+			Request quitRequest(QUIT_REQ_TYPE);
+			if(std::memcmp(reqBuf, &quitRequest, sizeof(Request)) == 0)	//break
 			{
 				break;
 			}
-			char reply[sizeof(double) + 1];
+			double reply;
 			chan.cread (&reply, sizeof(double)); //answer
-			reply[sizeof(double)] = '\0';
-			responseBuffer.push(CharArrToVecOfChar(reply, sizeof(double)));
+			responseBuffer.push(ResponseToVecOfChar(Response(patient, reply)));
 		}
 	}
 	else if(rqType == FILE_REQ_TYPE)
@@ -117,7 +129,7 @@ void histogram_thread_function(HistogramCollection &histogramCollection, Bounded
 	bool done = false;
 	while(!done)
 	{
-		vector<char> res = responseBuffer.pop();
+		Response resp = VecOfCharToResponse(responseBuffer.pop());
 	}
 }
 int main(int argc, char *argv[])
@@ -135,6 +147,7 @@ int main(int argc, char *argv[])
 	int w = 50;
 	int h = 5;
 	int m = 256;
+	REQUEST_TYPE reqType = DATA_REQUEST_TYPE;
 
 	while ((opt = getopt(argc, argv, "f:n:p:w:b:h:m:")) != -1)
 	{
@@ -142,6 +155,7 @@ int main(int argc, char *argv[])
 		{
 		case 'f':
 			filename = optarg;
+			reqType = FILE_REQUEST_TYPE;
 			break;
 		case 'n':
 			n = stoi(optarg);
@@ -189,13 +203,20 @@ int main(int argc, char *argv[])
 	gettimeofday(&start, 0);
 
 	/* Start all threads here */
-	vector<thread> patientThreads;
-	vector<thread> workerThreads;
-	vector<thread> histogramThreads;
+	vector<std::thread*> patientThreads;
+	vector<std::thread*> workerThreads;
+	vector<std::thread*> histogramThreads;
 	for(int i = 0; i < p; ++i)
 	{
-		thread patientThread(patient_thread_function, )
+		//REQUEST_TYPE rqType, BoundedBuffer &requestBuffer, int patient, int numItems, string fileName
+		std::thread *patientThread = new std::thread(patient_thread_function, reqType, &request_buffer, p, n, filename);
+		patientThreads.push_back(patientThread);
 	}
+	for(std::thread* t : patientThreads)
+	{
+		t->join();
+	}
+
 
 	/* Join all threads here */
 	gettimeofday(&end, 0);
