@@ -6,12 +6,7 @@
 #include <thread>
 using namespace std;
 
-enum REQUEST_TYPE {FILE_REQUEST_TYPE, DATA_REQUEST_TYPE};
-
-void testingFunc(bool yeehaw)
-{
-	std::cout << "BITCH\n";
-}
+enum THING_REQUEST_TYPE {FILE_REQUEST_TYPE, DATA_REQUEST_TYPE};
 
 struct Response
 {
@@ -48,7 +43,7 @@ vector<char> ResponseToVecOfChar(Response res)
 
 char* VecOfCharToCharArr(vector<char> vec)
 {
-	char arr[vec.size() + 1];
+	char *arr = new char[vec.size()];
 	for(int i = 0; i < vec.size(); ++i)
 	{
 		arr[i] = vec[i];
@@ -66,7 +61,7 @@ Response VecOfCharToResponse(vector<char> vec)
 
 
 
-void patient_thread_function(REQUEST_TYPE rqType, BoundedBuffer *requestBuffer, int patient, int numItems, string fileName)
+void patient_thread_function(THING_REQUEST_TYPE rqType, BoundedBuffer *requestBuffer, int patient, int numItems, string fileName)
 {
 	switch(rqType)
 	{
@@ -88,34 +83,32 @@ void patient_thread_function(REQUEST_TYPE rqType, BoundedBuffer *requestBuffer, 
 	}
 }
 
-void worker_thread_function(REQUEST_TYPE rqType, FIFORequestChannel &mainChan, BoundedBuffer &requestBuffer, BoundedBuffer &responseBuffer, int bufferCapacity)
+void worker_thread_function(THING_REQUEST_TYPE rqType, FIFORequestChannel *chan, BoundedBuffer *requestBuffer, BoundedBuffer *responseBuffer, int bufferCapacity)
 {
-	Request nc (NEWCHAN_REQ_TYPE);
-	mainChan.cwrite (&nc, sizeof(nc));
-	char nameBuf[bufferCapacity];
-	mainChan.cread(nameBuf, bufferCapacity);
-	FIFORequestChannel chan(string(nameBuf), FIFORequestChannel::CLIENT_SIDE);		//Request new channel
-	bool done = false;
-	if(rqType == DATA_REQ_TYPE)
+	// Request q(QUIT_REQ_TYPE);
+	// chan->cwrite(&q, sizeof(Request));
+	if(rqType == DATA_REQUEST_TYPE)
 	{
+		bool done = false;
 		while(!done)
 		{
-			vector<char> req = requestBuffer.pop();
+			vector<char> req = requestBuffer->pop();
 			int reqBufSize = req.size();
-			char* reqBuf = VecOfCharToCharArr(req);
-			DataRequest dataReq(0, 0, 0);
-			std::memcpy(&dataReq, reqBuf, sizeof(DataRequest));
-			int patient = dataReq.person;
-
-			chan.cwrite (&reqBuf, reqBufSize); //question
+			char *reqBuf = VecOfCharToCharArr(req);
 			Request quitRequest(QUIT_REQ_TYPE);
 			if(std::memcmp(reqBuf, &quitRequest, sizeof(Request)) == 0)	//break
 			{
+				chan->cwrite(&quitRequest, sizeof(Request));
 				break;
 			}
+			DataRequest dataReq(0, 0, 0);
+			std::memcpy(&dataReq, reqBuf, sizeof(DataRequest));
+			int patient = dataReq.person;
+ 
+			chan->cwrite (&reqBuf, reqBufSize); //question
 			double reply;
-			chan.cread (&reply, sizeof(double)); //answer
-			responseBuffer.push(ResponseToVecOfChar(Response(patient, reply)));
+			chan->cread (&reply, sizeof(double)); //answer
+			responseBuffer->push(ResponseToVecOfChar(Response(patient, reply)));
 		}
 	}
 	else if(rqType == FILE_REQ_TYPE)
@@ -124,12 +117,19 @@ void worker_thread_function(REQUEST_TYPE rqType, FIFORequestChannel &mainChan, B
 	}
 	
 }
-void histogram_thread_function(HistogramCollection &histogramCollection, BoundedBuffer &responseBuffer)
+void histogram_thread_function(HistogramCollection *histogramCollection, BoundedBuffer *responseBuffer)
 {
 	bool done = false;
 	while(!done)
 	{
-		Response resp = VecOfCharToResponse(responseBuffer.pop());
+		Response resp = VecOfCharToResponse(responseBuffer->pop());
+		int respBufSize = sizeof(Response);
+		char* respBuf = VecOfCharToCharArr(ResponseToVecOfChar(resp));
+		Request quitRequest(QUIT_REQ_TYPE);
+		if(std::memcmp(respBuf, &quitRequest, sizeof(Request)) == 0)	//break
+		{
+			break;
+		}
 	}
 }
 int main(int argc, char *argv[])
@@ -147,7 +147,7 @@ int main(int argc, char *argv[])
 	int w = 50;
 	int h = 5;
 	int m = 256;
-	REQUEST_TYPE reqType = DATA_REQUEST_TYPE;
+	THING_REQUEST_TYPE reqType = DATA_REQUEST_TYPE;
 
 	while ((opt = getopt(argc, argv, "f:n:p:w:b:h:m:")) != -1)
 	{
@@ -193,6 +193,7 @@ int main(int argc, char *argv[])
 		{
 			EXITONERROR("Could not launch the server");
 		}
+		return 0;
 	}
 	FIFORequestChannel chan("control", FIFORequestChannel::CLIENT_SIDE);
 	BoundedBuffer request_buffer(b);
@@ -212,7 +213,45 @@ int main(int argc, char *argv[])
 		std::thread *patientThread = new std::thread(patient_thread_function, reqType, &request_buffer, p, n, filename);
 		patientThreads.push_back(patientThread);
 	}
+	for(int i = 0; i < w; ++i)
+	{
+		Request nc (NEWCHAN_REQ_TYPE);
+		chan.cwrite (&nc, sizeof(nc));
+		char nameBuf[b];
+		chan.cread(nameBuf, b);
+		FIFORequestChannel *newChan = new FIFORequestChannel(string(nameBuf), FIFORequestChannel::CLIENT_SIDE);		//Request new channel
+		std::thread *workerThread = new std::thread(worker_thread_function, reqType, newChan, &request_buffer, &response_buffer, b);
+		workerThreads.push_back(workerThread);
+	}
+	for(int i = 0; i < h; ++i)
+	{
+		//HistogramCollection &histogramCollection, BoundedBuffer &responseBuffer
+		std::thread *histogramThread = new std::thread(histogram_thread_function, &hc, &response_buffer);
+		histogramThreads.push_back(histogramThread);
+	}
 	for(std::thread* t : patientThreads)
+	{
+		t->join();
+	}
+	for(int i = 0; i < w; ++i)
+	{
+		Request q (QUIT_REQ_TYPE);
+		char *buf = new char[sizeof(Request)];
+		std::memcpy(buf, &q, sizeof(Request));
+		request_buffer.push(CharArrToVecOfChar(buf, sizeof(Request)));
+	}
+	for(std::thread* t : workerThreads)
+	{
+		t->join();
+	}
+	for(int i = 0; i < h; ++i)
+	{
+		Request q (QUIT_REQ_TYPE);
+		char buf[sizeof(Request)];
+		std::memcpy(buf, &q, sizeof(Request));
+		response_buffer.push(CharArrToVecOfChar(buf, sizeof(Request)));
+	}
+	for(std::thread* t : histogramThreads)
 	{
 		t->join();
 	}

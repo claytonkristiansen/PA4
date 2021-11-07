@@ -8,8 +8,8 @@
             "name": "g++ - Build and debug active file",
             "type": "cppdbg",
             "request": "launch",
-            "program": "./client",
-            "args": ["-n 15000 -p 10 -h 5 -w 500 -b 1024"],
+            "program": "/home/osboxes/repos/PA4/client",
+            "args": ["-n 10", "-p 1", "-h 1", "-w 1", "-b 1024"],
             "stopAtEntry": false,
             "cwd": "${fileDirname}",
             "environment": [],
@@ -22,7 +22,6 @@
                     "ignoreFailures": true
                 }
             ],
-            "preLaunchTask": "C/C++: g++ build active file",
             "miDebuggerPath": "/usr/bin/gdb"
         }
     ]

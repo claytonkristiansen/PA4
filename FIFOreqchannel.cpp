@@ -47,3 +47,8 @@ int FIFORequestChannel::cwrite(void* msgbuf, int len){
 	return write (wfd, msgbuf, len);
 }
 
+string FIFORequestChannel::name()
+{
+	return my_name;
+}
+
