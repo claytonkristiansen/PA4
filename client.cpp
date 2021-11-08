@@ -99,7 +99,7 @@ void worker_thread_function(THING_REQUEST_TYPE rqType, FIFORequestChannel *chan,
 		{
 			vector<char> req = requestBuffer->pop();
 			int reqBufSize = req.size();
-			char *reqBuf = VecOfCharToCharArr(req);
+			char *reqBuf = VecOfCharToCharArr(req);				//Memory is allocated on heap here
 			Request quitRequest(QUIT_REQ_TYPE);
 			if(std::memcmp(reqBuf, &quitRequest, sizeof(Request)) == 0)	//break
 			{
@@ -117,6 +117,7 @@ void worker_thread_function(THING_REQUEST_TYPE rqType, FIFORequestChannel *chan,
 			responseBuffer->push(ResponseToVecOfChar(Response(patient, reply)));
 			// cout << "f\n";
 			//cout << patient << ": " << reply << "\n";
+			delete[] reqBuf;
 		}
 	}
 	else if(rqType == FILE_REQUEST_TYPE)
@@ -126,7 +127,7 @@ void worker_thread_function(THING_REQUEST_TYPE rqType, FIFORequestChannel *chan,
 		{
 			vector<char> req = requestBuffer->pop();
 			int reqBufSize = req.size();
-			char *reqBuf = VecOfCharToCharArr(req);
+			char *reqBuf = VecOfCharToCharArr(req);					//Memory is allocated on heap here
 			Request quitRequest(QUIT_REQ_TYPE);
 			if(std::memcmp(reqBuf, &quitRequest, sizeof(Request)) == 0)	//break
 			{
@@ -148,6 +149,7 @@ void worker_thread_function(THING_REQUEST_TYPE rqType, FIFORequestChannel *chan,
 			fout->seekp(fileReq.offset);
 			fout->write(buf4, fileReq.length);		//Write data to file
 			fileMutex->V();
+			delete[] reqBuf;
 		}
 		fout->close();
 	}
@@ -262,6 +264,8 @@ int main(int argc, char *argv[])
 	struct timeval start, end;
 	gettimeofday(&start, 0);
 
+	vector<FIFORequestChannel*> channels;
+
 	/* Start all threads here */
 	vector<std::thread*> patientThreads;
 	vector<std::thread*> workerThreads;
@@ -280,6 +284,7 @@ int main(int argc, char *argv[])
 		char nameBuf[b];
 		chan.cread(nameBuf, b);
 		FIFORequestChannel *newChan = new FIFORequestChannel(string(nameBuf), FIFORequestChannel::CLIENT_SIDE);		//Request new channel
+		channels.push_back(newChan);
 		std::thread *workerThread = new std::thread(worker_thread_function, reqType, newChan, &fileMutex, &request_buffer, &response_buffer, fout, m);
 		workerThreads.push_back(workerThread);
 	}
@@ -310,6 +315,7 @@ int main(int argc, char *argv[])
 				char *buf = new char[sizeof(Request)];
 				std::memcpy(buf, &q, sizeof(Request));
 				request_buffer.push(CharArrToVecOfChar(buf, sizeof(Request)));
+				delete[] buf;
 			}
 			for(std::thread* t : workerThreads)
 			{
@@ -347,6 +353,7 @@ int main(int argc, char *argv[])
 				char *buf = new char[sizeof(Request)];
 				std::memcpy(buf, &q, sizeof(Request));
 				request_buffer.push(CharArrToVecOfChar(buf, sizeof(Request)));
+				delete[] buf;
 			}
 			for(std::thread* t : workerThreads)
 			{
@@ -355,7 +362,24 @@ int main(int argc, char *argv[])
 			break;
 	}
 	
-
+	//Taking care of memory business
+	delete fout;
+	for(FIFORequestChannel *chanP : channels)
+	{
+		delete chanP;
+	}
+	for(std::thread *t : patientThreads)
+	{
+		delete t;
+	}
+	for(std::thread *t : workerThreads)
+	{
+		delete t;
+	}
+	for(std::thread *t : histogramThreads)
+	{
+		delete t;
+	}
 
 	/* Join all threads here */
 	gettimeofday(&end, 0);
@@ -365,6 +389,9 @@ int main(int argc, char *argv[])
 	int secs = (end.tv_sec * 1e6 + end.tv_usec - start.tv_sec * 1e6 - start.tv_usec) / (int)1e6;
 	int usecs = (int)(end.tv_sec * 1e6 + end.tv_usec - start.tv_sec * 1e6 - start.tv_usec) % ((int)1e6);
 	std::cout << "Took " << secs << " seconds and " << usecs << " micro seconds" << endl;
+
+	ofstream dataFOut("data.csv", ios::out | ios::app);
+	dataFOut << secs << "." << usecs << "\n";
 
 	// closing the channel
 	Request q(QUIT_REQ_TYPE);
