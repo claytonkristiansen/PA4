@@ -39,7 +39,7 @@ void process_newchannel_request (FIFORequestChannel *_channel){
 	FIFORequestChannel *data_channel = new FIFORequestChannel (new_channel_name, FIFORequestChannel::SERVER_SIDE);
 	channel_threads.push_back(thread (handle_process_loop, data_channel));
 
-	cout << "Channel " << new_channel_name << " made\n";
+	//cout << "Channel " << new_channel_name << " made\n";
 }	
 
 void populate_file_data (int person){
@@ -208,7 +208,7 @@ int main(int argc, char *argv[]){
 	FIFORequestChannel* control_channel = new FIFORequestChannel ("control", FIFORequestChannel::SERVER_SIDE);
 	handle_process_loop (control_channel);
 	for (int i=0; i<channel_threads.size(); i++){
-		std::cout << i << "\n";
+		//std::cout << i << "\n";
 		channel_threads[i].join();
 	}
 	cout << "Server process exited" << endl;

@@ -12,10 +12,15 @@ struct Response
 {
 	int m_patient;
 	double m_ecg;
+	bool m_kill = false;
 	Response(int patient, double ecg)
 	{
 		m_patient = patient;
 		m_ecg = ecg;
+	}
+	Response(bool kill)
+	{
+		m_kill = kill;
 	}
 	Response()
 	{
@@ -78,12 +83,12 @@ void patient_thread_function(THING_REQUEST_TYPE rqType, BoundedBuffer *requestBu
 			}
 			break;
 		case FILE_REQUEST_TYPE:
-
+			
 			break;
 	}
 }
 
-void worker_thread_function(THING_REQUEST_TYPE rqType, FIFORequestChannel *chan, BoundedBuffer *requestBuffer, BoundedBuffer *responseBuffer, int bufferCapacity)
+void worker_thread_function(THING_REQUEST_TYPE rqType, FIFORequestChannel *chan, Semaphore *fileMutex, BoundedBuffer *requestBuffer, BoundedBuffer *responseBuffer, std::ofstream *fout, int bufferCapacity)
 {
 	// Request q(QUIT_REQ_TYPE);
 	// chan->cwrite(&q, sizeof(Request));
@@ -102,34 +107,87 @@ void worker_thread_function(THING_REQUEST_TYPE rqType, FIFORequestChannel *chan,
 				break;
 			}
 			DataRequest dataReq(0, 0, 0);
-			std::memcpy(&dataReq, reqBuf, sizeof(DataRequest));
-			int patient = dataReq.person;
+			std::memcpy(&dataReq, reqBuf, sizeof(DataRequest));	//Copy memory into DataRequest object
+			int patient = dataReq.person;						//Extract the patient number
  
-			chan->cwrite (&reqBuf, reqBufSize); //question
+			chan->cwrite (&dataReq, sizeof(DataRequest)); //question
 			double reply;
 			chan->cread (&reply, sizeof(double)); //answer
+			// cout << "s\n";
 			responseBuffer->push(ResponseToVecOfChar(Response(patient, reply)));
+			// cout << "f\n";
+			//cout << patient << ": " << reply << "\n";
 		}
 	}
-	else if(rqType == FILE_REQ_TYPE)
+	else if(rqType == FILE_REQUEST_TYPE)
 	{
+		bool done = false;
+		while(!done)
+		{
+			vector<char> req = requestBuffer->pop();
+			int reqBufSize = req.size();
+			char *reqBuf = VecOfCharToCharArr(req);
+			Request quitRequest(QUIT_REQ_TYPE);
+			if(std::memcmp(reqBuf, &quitRequest, sizeof(Request)) == 0)	//break
+			{
+				chan->cwrite(&quitRequest, sizeof(Request));
+				break;
+			}
+			FileRequest fileReq(0, 0);
+			std::memcpy(&fileReq, reqBuf, sizeof(FileRequest));	//Copy memory into FileRequest object
+			
+			if(fileReq.length == 219)
+			{
+				int k = 0;
+			}
 
+			chan->cwrite(reqBuf, reqBufSize);
+			char buf4[bufferCapacity];
+			chan->cread(buf4, bufferCapacity);	//Read data from FIFO
+			fileMutex->P();
+			fout->seekp(fileReq.offset);
+			fout->write(buf4, fileReq.length);		//Write data to file
+			fileMutex->V();
+		}
+		fout->close();
 	}
-	
+	// cout << "WORKER THREAD STOPPED\n";
 }
 void histogram_thread_function(HistogramCollection *histogramCollection, BoundedBuffer *responseBuffer)
 {
 	bool done = false;
 	while(!done)
 	{
-		Response resp = VecOfCharToResponse(responseBuffer->pop());
-		int respBufSize = sizeof(Response);
-		char* respBuf = VecOfCharToCharArr(ResponseToVecOfChar(resp));
-		Request quitRequest(QUIT_REQ_TYPE);
-		if(std::memcmp(respBuf, &quitRequest, sizeof(Request)) == 0)	//break
+		// cout << "s\n";
+		vector<char> responseVec = responseBuffer->pop();
+		// cout << "f\n";
+		Response response = VecOfCharToResponse(responseVec);
+		if(response.m_kill)	//break
 		{
 			break;
 		}
+		histogramCollection->update(response.m_patient, response.m_ecg);
+	}
+	// cout << "HISTOGRAM THREAD STOPPED\n";
+}
+
+void file_request_thread_function(BoundedBuffer* requestBuffer, int fileLen, string fileName, int bufferCapacity)
+{
+	std::cout << "File length is: " << fileLen << " bytes" << endl;
+	ofstream file2("received/" + fileName);
+	int len = sizeof (FileRequest) + fileName.size()+1;
+	for(int byteOffset = 0; byteOffset < fileLen; byteOffset += bufferCapacity)
+	{
+		int requestAmount = bufferCapacity;
+		if(byteOffset + bufferCapacity > fileLen) //If this is the last request adjust requestAmount
+		{
+			requestAmount = fileLen - byteOffset;
+		}
+		char buf3[len];
+		FileRequest fq(byteOffset, requestAmount);
+		std::memcpy (buf3, &fq, sizeof (FileRequest));
+		std::strcpy (buf3 + sizeof (FileRequest), fileName.c_str());
+		requestBuffer->push(CharArrToVecOfChar(buf3, len));
 	}
 }
 int main(int argc, char *argv[])
@@ -148,13 +206,14 @@ int main(int argc, char *argv[])
 	int h = 5;
 	int m = 256;
 	THING_REQUEST_TYPE reqType = DATA_REQUEST_TYPE;
+	Semaphore fileMutex(1);
 
 	while ((opt = getopt(argc, argv, "f:n:p:w:b:h:m:")) != -1)
 	{
 		switch (opt)
 		{
 		case 'f':
-			filename = optarg;
+			filename = string(optarg);
 			reqType = FILE_REQUEST_TYPE;
 			break;
 		case 'n':
@@ -207,12 +266,13 @@ int main(int argc, char *argv[])
 	vector<std::thread*> patientThreads;
 	vector<std::thread*> workerThreads;
 	vector<std::thread*> histogramThreads;
-	for(int i = 0; i < p; ++i)
+
+	std::ofstream *fout = nullptr;
+	if(reqType == FILE_REQUEST_TYPE)
 	{
-		//REQUEST_TYPE rqType, BoundedBuffer &requestBuffer, int patient, int numItems, string fileName
-		std::thread *patientThread = new std::thread(patient_thread_function, reqType, &request_buffer, p, n, filename);
-		patientThreads.push_back(patientThread);
+		fout = new std::ofstream("Recieved/" + filename);
 	}
+
 	for(int i = 0; i < w; ++i)
 	{
 		Request nc (NEWCHAN_REQ_TYPE);
@@ -220,41 +280,81 @@ int main(int argc, char *argv[])
 		char nameBuf[b];
 		chan.cread(nameBuf, b);
 		FIFORequestChannel *newChan = new FIFORequestChannel(string(nameBuf), FIFORequestChannel::CLIENT_SIDE);		//Request new channel
-		std::thread *workerThread = new std::thread(worker_thread_function, reqType, newChan, &request_buffer, &response_buffer, b);
+		std::thread *workerThread = new std::thread(worker_thread_function, reqType, newChan, &fileMutex, &request_buffer, &response_buffer, fout, m);
 		workerThreads.push_back(workerThread);
 	}
-	for(int i = 0; i < h; ++i)
+
+	switch(reqType)
 	{
-		//HistogramCollection &histogramCollection, BoundedBuffer &responseBuffer
-		std::thread *histogramThread = new std::thread(histogram_thread_function, &hc, &response_buffer);
-		histogramThreads.push_back(histogramThread);
+		case DATA_REQUEST_TYPE:
+			for(int i = 1; i <= p; ++i)			//Create Patient threads
+			{
+				std::thread *patientThread = new std::thread(patient_thread_function, reqType, &request_buffer, i, n, filename);
+				patientThreads.push_back(patientThread);
+
+				Histogram *h = new Histogram(100, -2, 2);
+				hc.add(h);
+			}	
+			for(int i = 0; i < h; ++i)			//Create Histogram threads
+			{
+				std::thread *histogramThread = new std::thread(histogram_thread_function, &hc, &response_buffer);
+				histogramThreads.push_back(histogramThread);
+			}
+			for(std::thread* t : patientThreads)
+			{
+				t->join();
+			}
+			for(int i = 0; i < w; ++i)
+			{
+				Request q (QUIT_REQ_TYPE);
+				char *buf = new char[sizeof(Request)];
+				std::memcpy(buf, &q, sizeof(Request));
+				request_buffer.push(CharArrToVecOfChar(buf, sizeof(Request)));
+			}
+			for(std::thread* t : workerThreads)
+			{
+				t->join();
+			}
+			for(int i = 0; i < h; ++i)
+			{
+				Response r(true);
+				char buf[sizeof(Response)];
+				std::memcpy(buf, &r, sizeof(Response));
+				response_buffer.push(CharArrToVecOfChar(buf, sizeof(Response)));
+			}
+			for(std::thread* t : histogramThreads)
+			{
+				t->join();
+			}
+			break;
+		case FILE_REQUEST_TYPE:
+			int64 filelen;	
+			FileRequest fm (0,0);
+			int len = sizeof (FileRequest) + filename.size()+1;
+			char buf2 [len];
+			std::memcpy (buf2, &fm, sizeof (FileRequest));
+			std::strcpy (buf2 + sizeof (FileRequest), filename.c_str());
+			chan.cwrite (buf2, len);  
+			chan.cread (&filelen, sizeof(int64));
+			if (isValidResponse(&filelen))
+			{
+				std::thread fileReqestThread(file_request_thread_function, &request_buffer, filelen, filename, m);
+				fileReqestThread.join();
+			}
+			for(int i = 0; i < w; ++i)
+			{
+				Request q (QUIT_REQ_TYPE);
+				char *buf = new char[sizeof(Request)];
+				std::memcpy(buf, &q, sizeof(Request));
+				request_buffer.push(CharArrToVecOfChar(buf, sizeof(Request)));
+			}
+			for(std::thread* t : workerThreads)
+			{
+				t->join();
+			}
+			break;
 	}
-	for(std::thread* t : patientThreads)
-	{
-		t->join();
-	}
-	for(int i = 0; i < w; ++i)
-	{
-		Request q (QUIT_REQ_TYPE);
-		char *buf = new char[sizeof(Request)];
-		std::memcpy(buf, &q, sizeof(Request));
-		request_buffer.push(CharArrToVecOfChar(buf, sizeof(Request)));
-	}
-	for(std::thread* t : workerThreads)
-	{
-		t->join();
-	}
-	for(int i = 0; i < h; ++i)
-	{
-		Request q (QUIT_REQ_TYPE);
-		char buf[sizeof(Request)];
-		std::memcpy(buf, &q, sizeof(Request));
-		response_buffer.push(CharArrToVecOfChar(buf, sizeof(Request)));
-	}
-	for(std::thread* t : histogramThreads)
-	{
-		t->join();
-	}
+	
 
 
 	/* Join all threads here */

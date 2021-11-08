@@ -46,7 +46,6 @@ public:
 		//2. Pop the front item of the queue.
 		//3. Unlock and notify using the right sync variables
 		//4. Return the popped vector
-
 		fullSlots.P();
 		mutex.P();
 		vector<char> item = q.front();
