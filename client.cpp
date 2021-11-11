@@ -4,9 +4,14 @@
 #include "HistogramCollection.h"
 #include <sys/wait.h>
 #include <thread>
+#include <signal.h>
 using namespace std;
 
 enum THING_REQUEST_TYPE {FILE_REQUEST_TYPE, DATA_REQUEST_TYPE};
+
+HistogramCollection hc;
+bool programDone;
+mutex mut;
 
 struct Response
 {
@@ -41,8 +46,8 @@ vector<char> CharArrToVecOfChar(char *arr, int size)
 
 vector<char> ResponseToVecOfChar(Response res)
 {
-	char buf[sizeof(Response) + 1];
-	std::memcpy(buf, &res, sizeof(Response) + 1);
+	char buf[sizeof(Response)];
+	std::memcpy(buf, &res, sizeof(Response));
 	return CharArrToVecOfChar(buf, sizeof(Response));
 }
 
@@ -61,10 +66,22 @@ Response VecOfCharToResponse(vector<char> vec)
 	char* buf = VecOfCharToCharArr(vec);
 	Response r;
 	std::memcpy(&r, buf, vec.size());
+	delete[] buf;
 	return r;
 }
 
-
+void BonusSignalHander(int sigNumber)
+{
+	if(!programDone)
+	{
+		system("clear");
+		mut.lock();
+		hc.print();
+		mut.unlock();
+		alarm(2);
+	}
+	return;
+}
 
 void patient_thread_function(THING_REQUEST_TYPE rqType, BoundedBuffer *requestBuffer, int patient, int numItems, string fileName)
 {
@@ -73,13 +90,13 @@ void patient_thread_function(THING_REQUEST_TYPE rqType, BoundedBuffer *requestBu
 		case DATA_REQUEST_TYPE:
 			for(int i = 0; i < numItems; ++i)
 			{
-				char buf[sizeof(DataRequest) + 1];
+				char buf[sizeof(DataRequest)];
 				DataRequest dataRequest(patient, 0.004 * i, 1);
-				std::memcpy(buf, &dataRequest, sizeof(DataRequest) + 1);
+				std::memcpy(buf, &dataRequest, sizeof(DataRequest));
 				requestBuffer->push(CharArrToVecOfChar(buf, sizeof(DataRequest)));
-				dataRequest = DataRequest(patient, 0.004 * i, 2);
-				std::memcpy(buf, &dataRequest, sizeof(DataRequest) + 1);
-				requestBuffer->push(CharArrToVecOfChar(buf, sizeof(DataRequest)));
+				// dataRequest = DataRequest(patient, 0.004 * i, 2);
+				// std::memcpy(buf, &dataRequest, sizeof(DataRequest));
+				// requestBuffer->push(CharArrToVecOfChar(buf, sizeof(DataRequest)));
 			}
 			break;
 		case FILE_REQUEST_TYPE:
@@ -104,6 +121,7 @@ void worker_thread_function(THING_REQUEST_TYPE rqType, FIFORequestChannel *chan,
 			if(std::memcmp(reqBuf, &quitRequest, sizeof(Request)) == 0)	//break
 			{
 				chan->cwrite(&quitRequest, sizeof(Request));
+				delete[] reqBuf;
 				break;
 			}
 			DataRequest dataReq(0, 0, 0);
@@ -132,6 +150,7 @@ void worker_thread_function(THING_REQUEST_TYPE rqType, FIFORequestChannel *chan,
 			if(std::memcmp(reqBuf, &quitRequest, sizeof(Request)) == 0)	//break
 			{
 				chan->cwrite(&quitRequest, sizeof(Request));
+				delete[] reqBuf;
 				break;
 			}
 			FileRequest fileReq(0, 0);
@@ -194,7 +213,7 @@ void file_request_thread_function(BoundedBuffer* requestBuffer, int fileLen, str
 }
 int main(int argc, char *argv[])
 {
-
+	programDone = false;
 	int opt;
 	int p = 1;
 	double t = 0.0;
@@ -259,7 +278,6 @@ int main(int argc, char *argv[])
 	FIFORequestChannel chan("control", FIFORequestChannel::CLIENT_SIDE);
 	BoundedBuffer request_buffer(b);
 	BoundedBuffer response_buffer(b);
-	HistogramCollection hc;
 
 	struct timeval start, end;
 	gettimeofday(&start, 0);
@@ -292,12 +310,14 @@ int main(int argc, char *argv[])
 	switch(reqType)
 	{
 		case DATA_REQUEST_TYPE:
+			alarm(2);
+			signal(SIGALRM, BonusSignalHander);
 			for(int i = 1; i <= p; ++i)			//Create Patient threads
 			{
 				std::thread *patientThread = new std::thread(patient_thread_function, reqType, &request_buffer, i, n, filename);
 				patientThreads.push_back(patientThread);
 
-				Histogram *h = new Histogram(100, -2, 2);
+				Histogram *h = new Histogram(10, -2, 2);
 				hc.add(h);
 			}	
 			for(int i = 0; i < h; ++i)			//Create Histogram threads
@@ -399,4 +419,5 @@ int main(int argc, char *argv[])
 	// client waiting for the server process, which is the child, to terminate
 	wait(0);
 	std::cout << "Client process exited" << endl;
+	programDone = true;
 }

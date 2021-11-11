@@ -180,13 +180,13 @@ void handle_process_loop(FIFORequestChannel *channel){
 		}
 		Request* r = (Request *) buffer;
 		if (r->getType() == QUIT_REQ_TYPE){
-			cout << "Connection with " << channel->name() << " closed by client" << endl;
+			//cout << "Connection with " << channel->name() << " closed by client" << endl;
 			break;
 			// note that QUIT_MSG does not get a reply from the server
 		}
 		process_request(channel, r);
 	}
-	delete buffer;
+	delete[] buffer;
 	delete channel;
 }
 

@@ -8,12 +8,9 @@ class HistogramCollection
 {
 private:
     vector<Histogram *> hists; //collection of histograms
-    Semaphore addMutex;
-    Semaphore updateMutex;
 
 public:
     HistogramCollection()
-    :addMutex(1), updateMutex(1)
     {
         hists.clear();
     }
@@ -25,16 +22,12 @@ public:
 
     void add(Histogram *h)
     {
-        addMutex.P();
         hists.push_back(h);
-        addMutex.V();
     }
 
     void update(int patient, double value)
     {
-        updateMutex.P();
         hists[patient - 1]->update(value);
-        updateMutex.V();
     }
 
     void print()
